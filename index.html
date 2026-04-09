@@ -508,8 +508,8 @@ const tierBadge = t => {
 // ============================================================
 // STATE
 // ============================================================
-const STORE_KEY = "vetur_v21";
-const SESS_KEY  = "vetur_sess_v21";
+const STORE_KEY = "vetur_v22";
+const SESS_KEY  = "vetur_sess_v22";
 
 // ── Firebase config (preenchida pelo admin em Configurações) ──
 let _db = null;
@@ -609,23 +609,25 @@ let iaOpen=false, iaMsgs=[], iaLoading=false;
 let movsSearch="";
 
 function loadStore(){
+  // Always start fresh — ignore any cached localStorage data
+  store = defaultStore();
+  // Try to restore non-credential data (movs, programas, clientes) from localStorage
   try{
     const raw = localStorage.getItem(STORE_KEY);
     if(raw){
       const parsed = JSON.parse(raw);
-      if(parsed && parsed.master && parsed.clientes){
-        store = parsed;
-        if(!store.milheiroRefs) store.milheiroRefs={};
-        if(store.apiKey===undefined) store.apiKey="";
-        if(!store.iaPrompt) store.iaPrompt=defaultStore().iaPrompt;
-        if(!store.movs) store.movs=[];
-        if(!store.programas||!store.programas.length) store.programas=JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT));
-        PROGRAMAS_DEFAULT.forEach(pd=>{ if(!store.programas.find(p=>p.nome===pd.nome)) store.programas.push({...pd}); });
-        return;
+      if(parsed){
+        // Keep credentials from defaultStore, restore user data
+        if(parsed.movs) store.movs = parsed.movs;
+        if(parsed.clientes) store.clientes = parsed.clientes;
+        if(parsed.programas && parsed.programas.length) store.programas = parsed.programas;
+        if(parsed.apiKey) store.apiKey = parsed.apiKey;
+        if(parsed.iaPrompt) store.iaPrompt = parsed.iaPrompt;
+        if(parsed.milheiroRefs) store.milheiroRefs = parsed.milheiroRefs;
+        if(parsed.cotacaoDolarManual) store.cotacaoDolarManual = parsed.cotacaoDolarManual;
       }
     }
   } catch(e){}
-  store = defaultStore();
 }
 function saveStore(){
   // Salva local sempre; se Firebase configurado, salva lá também
