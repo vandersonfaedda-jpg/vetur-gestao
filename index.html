@@ -508,8 +508,8 @@ const tierBadge = t => {
 // ============================================================
 // STATE
 // ============================================================
-const STORE_KEY = "vetur_v23";
-const SESS_KEY  = "vetur_sess_v23";
+const STORE_KEY = "vetur_v24";
+const SESS_KEY  = "vetur_sess_v24";
 
 // ── Firebase config (preenchida pelo admin em Configurações) ──
 let _db = null;
@@ -558,12 +558,14 @@ async function loadStoreFirebase(){
   try{
     const snap = await _db.collection("vetur").doc("store").get();
     if(snap.exists){
-      store = snap.data();
-      if(!store.milheiroRefs) store.milheiroRefs={};
-      if(store.apiKey===undefined) store.apiKey="";
-      if(!store.iaPrompt) store.iaPrompt=defaultStore().iaPrompt;
-      if(!store.movs) store.movs=[];
-      if(!store.programas||!store.programas.length) store.programas=JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT));
+      const fd = snap.data();
+      store = defaultStore(); // sempre usa credenciais do código
+      if(fd.movs) store.movs=fd.movs;
+      if(fd.clientes) store.clientes=fd.clientes;
+      if(fd.programas&&fd.programas.length) store.programas=fd.programas;
+      if(fd.apiKey) store.apiKey=fd.apiKey;
+      if(fd.iaPrompt) store.iaPrompt=fd.iaPrompt;
+      if(fd.milheiroRefs) store.milheiroRefs=fd.milheiroRefs;
       PROGRAMAS_DEFAULT.forEach(pd=>{ if(!store.programas.find(p=>p.nome===pd.nome)) store.programas.push({...pd}); });
       return true;
     }
