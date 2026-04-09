@@ -508,8 +508,8 @@ const tierBadge = t => {
 // ============================================================
 // STATE
 // ============================================================
-const STORE_KEY = "vetur_v20";
-const SESS_KEY  = "vetur_sess_v11";
+const STORE_KEY = "vetur_v21";
+const SESS_KEY  = "vetur_sess_v21";
 
 // ── Firebase config (preenchida pelo admin em Configurações) ──
 let _db = null;
@@ -2200,10 +2200,8 @@ function resetIaPrompt(){
 
 
 function hardReset(){
-  if(!confirm("Isso vai apagar todos os dados locais e reiniciar o app. Continuar?")) return;
   try{
-    // Limpar todas as chaves VETUR
-    Object.keys(localStorage).filter(k=>k.startsWith("vetur")).forEach(k=>localStorage.removeItem(k));
+    Object.keys(localStorage).forEach(k=>localStorage.removeItem(k));
   }catch(e){}
   location.reload();
 }
