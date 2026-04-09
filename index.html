@@ -2265,11 +2265,6 @@ document.getElementById("app").innerHTML = `
     if(!fbLoaded) loadStore();
   }
   loadSession();
-  // Auto-login direto como master
-  if(!session){
-    session={tipo:"master",nome:"Administrador",email:"gestao@veturviagens.com.br",_ts:Date.now()};
-    saveSession();
-  }
   if(session){
     if(session.tipo==="master") curCliente=store.clientes[0]?.tag||"";
     else curCliente=session.tag||"";
