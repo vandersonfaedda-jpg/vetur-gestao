@@ -3,10 +3,6 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-
-<meta http-equiv="X-Content-Type-Options" content="nosniff"/>
-<meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=(), payment=()"/>
-<meta name="referrer" content="strict-origin-when-cross-origin"/>
 <title>VETUR — Gestão de Milhas</title>
 <!-- Firebase SDK via CDN compat (síncrono, sem ESM) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -512,44 +508,7 @@ const tierBadge = t => {
 // ============================================================
 // STATE
 // ============================================================
-const STORE_KEY = "vetur_v17"; // bump to force re-login with new credentials
-
-// ── PBKDF2 password hashing ───────────────────────────────────────────────
-const PBKDF2_ITERATIONS = 200000;
-const PBKDF2_SALT = "vetur_gestao_pbkdf2_v1";
-async function hashSenha(senha){
-  try{
-    const enc = new TextEncoder();
-    const key = await crypto.subtle.importKey("raw", enc.encode(senha), {name:"PBKDF2"}, false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({name:"PBKDF2",salt:enc.encode(PBKDF2_SALT),iterations:PBKDF2_ITERATIONS,hash:"SHA-256"}, key, 256);
-    return Array.from(new Uint8Array(bits)).map(b=>b.toString(16).padStart(2,"0")).join("");
-  }catch(e){
-    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(senha+PBKDF2_SALT));
-    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-  }
-}
-async function verificarSenha(input, stored){
-  if(!stored) return false;
-  // Sempre tenta texto puro primeiro (para senhas do defaultStore)
-  if(input === stored) return true;
-  // Depois tenta hash
-  if(stored.length === 64){ const h = await hashSenha(input); return h === stored; }
-  return false;
-}
-
-// ── Rate limiting ─────────────────────────────────────────────────────────
-const _loginAttempts = {count:0, lockUntil:0};
-function checkRateLimit(){
-  if(Date.now() < _loginAttempts.lockUntil) return false;
-  _loginAttempts.count++;
-  if(_loginAttempts.count >= 5){ _loginAttempts.lockUntil = Date.now() + 5*60*1000; _loginAttempts.count = 0; return false; }
-  return true;
-}
-function resetRateLimit(){ _loginAttempts.count = 0; _loginAttempts.lockUntil = 0; }
-
-// ── XSS sanitize ─────────────────────────────────────────────────────────
-function sanitize(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
-function safeUrl(u){ if(!u) return "#"; const l=u.toLowerCase().trim(); if(/^(javascript|data|vbscript):/.test(l)) return "#"; return u; }
+const STORE_KEY = "vetur_v20";
 const SESS_KEY  = "vetur_sess_v11";
 
 // ── Firebase config (preenchida pelo admin em Configurações) ──
@@ -636,7 +595,7 @@ const defaultStore = () => ({
   clientes:[],
   movs:[],
   programas: JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT)),
-  master:{email:"gestao@veturviagens.com.br",senha:"Vetur@2026"},
+  master:{email:"gestao@veturviagens.com.br",senha:"vetur2024"},
   milheiroRefs:{},
   apiKey:"",
   iaPrompt:"Você é a assistente virtual da VETUR, especializada em inteligência em milhas e gestão de programas de fidelidade. Responda em português brasileiro de forma clara e objetiva. Conheça profundamente todos os programas de fidelidade brasileiros e internacionais, cartões de crédito premium, estratégias de maximização de milhas. Seja prestativo e sugira ações práticas."
@@ -674,14 +633,8 @@ function saveStore(){
   if(_fbReady) saveStoreFirebase();
 }
 function loadSession(){
-  try{
-    const s=localStorage.getItem(SESS_KEY);
-    if(!s){ session=null; return; }
-    const parsed=JSON.parse(s);
-    if(!parsed||typeof parsed!=="object"||!parsed.tipo||!parsed.nome){ session=null; return; }
-    if(parsed._ts && Date.now()-parsed._ts > 8*60*60*1000){ localStorage.removeItem(SESS_KEY); session=null; return; }
-    session=parsed;
-  }catch(e){ session=null; }
+  try{ const s=localStorage.getItem(SESS_KEY); if(s) session=JSON.parse(s); }
+  catch(e){ session=null; }
 }
 function saveSession(){ try{if(session)localStorage.setItem(SESS_KEY,JSON.stringify(session));else localStorage.removeItem(SESS_KEY);}catch(e){} }
 
@@ -766,52 +719,26 @@ function bindLogin(){
     eye.textContent = senha.type==="password"?"👁":"🙈";
   });
 
-  btn.addEventListener("click", async ()=>{
+  btn.addEventListener("click",()=>{
     const e=email.value.trim().toLowerCase();
     const s=senha.value;
     err.classList.add("hidden");
-
-    // Rate limiting
-    if(Date.now() < _loginAttempts.lockUntil){
-      const mins = Math.ceil((_loginAttempts.lockUntil - Date.now())/60000);
-      err.textContent="Muitas tentativas. Aguarde "+mins+" minuto(s).";
-      err.classList.remove("hidden"); return;
-    }
-    if(!checkRateLimit()){
-      err.textContent="Muitas tentativas incorretas. Acesso bloqueado por 5 minutos.";
-      err.classList.remove("hidden"); return;
-    }
-
     btn.textContent="Verificando…"; btn.disabled=true;
-    try{
-      // Master login
-      const isMaster = await verificarSenha(s, store.master.senha);
-      if(e===store.master.email.toLowerCase() && isMaster){
-        // Migrate to hash if still plain text
-        if(store.master.senha.length < 60){ store.master.senha = await hashSenha(s); saveStore(); }
-        resetRateLimit();
-        session={tipo:"master",nome:"Administrador",email:e,_ts:Date.now()};
+    setTimeout(()=>{
+      if(e===store.master.email.toLowerCase()&&s===store.master.senha){
+        session={tipo:"master",nome:"Administrador",email:e};
         curCliente=store.clientes[0]?.tag||"";
         saveSession(); render(); return;
       }
-      // Client login
-      const c=store.clientes.find(x=>x.email.toLowerCase()===e);
+      const c=store.clientes.find(x=>x.email.toLowerCase()===e&&x.senha===s);
       if(c){
-        const ok = await verificarSenha(s, c.senha);
-        if(ok){
-          if(c.senha.length < 60){ c.senha = await hashSenha(s); saveStore(); }
-          resetRateLimit();
-          session={tipo:"cliente",nome:c.nome,tag:c.tag,email:e,_ts:Date.now()};
-          curCliente=c.tag; saveSession(); render(); return;
-        }
+        session={tipo:"cliente",nome:c.nome,tag:c.tag,email:e};
+        curCliente=c.tag; saveSession(); render(); return;
       }
       err.textContent="E-mail ou senha incorretos.";
       err.classList.remove("hidden");
-    }catch(ex){
-      err.textContent="Erro ao verificar credenciais.";
-      err.classList.remove("hidden");
-    }
-    btn.textContent="Entrar →"; btn.disabled=false;
+      btn.textContent="Entrar →"; btn.disabled=false;
+    },600);
   });
 }
 
@@ -1852,10 +1779,10 @@ function bindTabEvents(isMaster){
   });
 
   // Config
-  document.getElementById("btn-salvar-master")?.addEventListener("click", async ()=>{
+  document.getElementById("btn-salvar-master")?.addEventListener("click",()=>{
     const e=document.getElementById("cfg-email")?.value?.trim();
     const s=document.getElementById("cfg-senha")?.value;
-    if(e&&s){ store.master={email:e,senha:await hashSenha(s)}; saveStore(); }
+    if(e&&s){ store.master={email:e,senha:s}; saveStore(); }
   });
   document.querySelectorAll("[data-verCliente]").forEach(el=>el.addEventListener("click",e=>{ curCliente=e.currentTarget.dataset.vercliente; curTab="dashboard"; render(); }));
 }
@@ -1934,13 +1861,7 @@ function bindModal(isMaster){
       if(store.clientes.find(c=>c.tag===tag||c.email.toLowerCase()===email.toLowerCase())){
         err.textContent="E-mail ou nome já cadastrado."; err.classList.remove("hidden"); return;
       }
-      hashSenha(senha).then(h=>{
-        const cpf=document.getElementById("c-cpf")?.value||"";
-        const tel=document.getElementById("c-tel")?.value||"";
-        store.clientes.push({id:Date.now(),nome,tag,email,senha:h,cpf,tel});
-        saveStore(); render(); bindMain();
-      });
-      return; // hashing is async
+      store.clientes.push({id:Date.now(),nome,tag,email,senha,cpf:document.getElementById("c-cpf")?.value||"",tel:document.getElementById("c-tel")?.value||""});
       curCliente=tag; saveStore(); modalState=null; render();
     });
   }
