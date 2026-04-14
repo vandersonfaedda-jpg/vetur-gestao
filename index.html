@@ -4,9 +4,10 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>VETUR — Gestão de Milhas</title>
-<!-- Firebase SDK via CDN compat (síncrono, sem ESM) -->
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<!-- Supabase Edge Function endpoint -->
+<script>
+  window.SUPA_FN = "https://lpjsxhebdstbgzcgttgm.supabase.co/functions/v1/vetur-auth";
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -508,83 +509,58 @@ const tierBadge = t => {
 // ============================================================
 // STATE
 // ============================================================
-const STORE_KEY = "vetur_v31";
-const SESS_KEY  = "vetur_sess_v11";
+const STORE_KEY = "vetur_v26";
+const SESS_KEY  = "vetur_sess_v26";
 
-// ── Firebase config (preenchida pelo admin em Configurações) ──
-let _db = null;
-let _fbUnsubscribe = null;
-let _fbReady = false;
+// ── Supabase Edge Function ──
+const SUPA_FN = window.SUPA_FN || "https://lpjsxhebdstbgzcgttgm.supabase.co/functions/v1/vetur-auth";
 
-function getFirebaseCfg(){
+async function supaCall(payload){
   try{
-    const raw = localStorage.getItem("vetur_fb_cfg");
-    if(raw) return JSON.parse(raw);
-  }catch(e){}
-  // Credenciais padrão já configuradas
-  return {
-    apiKey: "AIzaSyBdJkLlILakDviENTNdY305aYUmWWCis0g",
-    authDomain: "vetur-gestao.firebaseapp.com",
-    projectId: "vetur-gestao",
-    storageBucket: "vetur-gestao.firebasestorage.app",
-    messagingSenderId: "974546202723",
-    appId: "1:974546202723:web:ffe41ea74a8214a6ff4856"
-  };
-}
-function saveFirebaseCfg(cfg){
-  try{ localStorage.setItem("vetur_fb_cfg", JSON.stringify(cfg)); }catch(e){}
+    const r = await fetch(SUPA_FN, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({app:"gestao",...payload})
+    });
+    return r.ok ? await r.json() : {ok:false,erro:"Erro de rede"};
+  }catch(e){ return {ok:false,erro:e.message}; }
 }
 
-async function initFirebase(){
-  const cfg = getFirebaseCfg();
-  if(!cfg || !cfg.apiKey || !cfg.projectId) return false;
+async function loadStoreSupabase(){
   try{
-    if(typeof firebase === "undefined") return false;
-    // Evitar dupla inicialização
-    let fbApp;
-    try{ fbApp = firebase.app(cfg.projectId); }
-    catch(e){ fbApp = firebase.initializeApp(cfg, cfg.projectId); }
-    _db = fbApp.firestore();
-    _fbReady = true;
-    return true;
-  }catch(e){
-    console.warn("Firebase init error:", e.message);
-    return false;
-  }
-}
-
-async function loadStoreFirebase(){
-  if(!_fbReady || !_db) return false;
-  try{
-    const snap = await _db.collection("vetur").doc("store").get();
-    if(snap.exists){
-      store = snap.data();
-      if(!store.milheiroRefs) store.milheiroRefs={};
-      if(store.apiKey===undefined) store.apiKey="";
-      if(!store.iaPrompt) store.iaPrompt=defaultStore().iaPrompt;
-      if(!store.movs) store.movs=[];
-      if(!store.programas||!store.programas.length) store.programas=JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT));
-      PROGRAMAS_DEFAULT.forEach(pd=>{ if(!store.programas.find(p=>p.nome===pd.nome)) store.programas.push({...pd}); });
-      return true;
+    const res = await supaCall({action:"load"});
+    if(!res.ok) return false;
+    if(res.config){
+      store.apiKey = res.config.api_key||"";
+      store.iaPrompt = res.config.ia_prompt||store.iaPrompt;
+      store.milheiroRefs = res.config.milheiro_refs||{};
+      if(res.config.cotacao_dolar) store.cotacaoDolarManual = Number(res.config.cotacao_dolar);
     }
-    store = defaultStore();
-    await saveStoreFirebase();
+    if(res.clientes) store.clientes = res.clientes;
+    if(res.programas && res.programas.length) store.programas = res.programas;
+    if(res.movimentacoes) store.movs = res.movimentacoes.map(m=>({
+      ...m, ...(m.dados_json||{})
+    }));
+    PROGRAMAS_DEFAULT.forEach(pd=>{ if(!store.programas.find(p=>p.nome===pd.nome)) store.programas.push({...pd}); });
+    saveStoreLocal();
     return true;
-  }catch(e){
-    console.warn("Firebase load error:", e.message);
-    return false;
-  }
+  }catch(e){ console.warn("Supabase load:",e.message); return false; }
 }
 
-async function saveStoreFirebase(){
-  if(!_fbReady || !_db) { saveStoreLocal(); return; }
+async function saveStoreSupabase(){
   try{
-    await _db.collection("vetur").doc("store").set(store);
-    saveStoreLocal();
-  }catch(e){
-    console.warn("Firebase save error:", e.message);
-    saveStoreLocal();
-  }
+    await supaCall({action:"save", dados:{
+      config:{
+        api_key: store.apiKey||"",
+        ia_prompt: store.iaPrompt,
+        milheiro_refs: store.milheiroRefs||{},
+        cotacao_dolar: store.cotacaoDolarManual||null
+      },
+      clientes: store.clientes,
+      programas: store.programas
+    }});
+  }catch(e){ console.warn("Supabase save:",e.message); }
+  saveStoreLocal();
 }
 
 function saveStoreLocal(){
@@ -595,7 +571,6 @@ const defaultStore = () => ({
   clientes:[],
   movs:[],
   programas: JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT)),
-  master:{email:"gestao@veturviagens.com.br",senha:"vf@487815"},
   milheiroRefs:{},
   apiKey:"",
   iaPrompt:"Você é a assistente virtual da VETUR, especializada em inteligência em milhas e gestão de programas de fidelidade. Responda em português brasileiro de forma clara e objetiva. Conheça profundamente todos os programas de fidelidade brasileiros e internacionais, cartões de crédito premium, estratégias de maximização de milhas. Seja prestativo e sugira ações práticas."
@@ -609,28 +584,28 @@ let iaOpen=false, iaMsgs=[], iaLoading=false;
 let movsSearch="";
 
 function loadStore(){
+  // Always start fresh — ignore any cached localStorage data
+  store = defaultStore();
+  // Try to restore non-credential data (movs, programas, clientes) from localStorage
   try{
     const raw = localStorage.getItem(STORE_KEY);
     if(raw){
       const parsed = JSON.parse(raw);
-      if(parsed && parsed.master && parsed.clientes){
-        store = parsed;
-        if(!store.milheiroRefs) store.milheiroRefs={};
-        if(store.apiKey===undefined) store.apiKey="";
-        if(!store.iaPrompt) store.iaPrompt=defaultStore().iaPrompt;
-        if(!store.movs) store.movs=[];
-        if(!store.programas||!store.programas.length) store.programas=JSON.parse(JSON.stringify(PROGRAMAS_DEFAULT));
-        PROGRAMAS_DEFAULT.forEach(pd=>{ if(!store.programas.find(p=>p.nome===pd.nome)) store.programas.push({...pd}); });
-        return;
+      if(parsed){
+        // Keep credentials from defaultStore, restore user data
+        if(parsed.movs) store.movs = parsed.movs;
+        if(parsed.clientes) store.clientes = parsed.clientes;
+        if(parsed.programas && parsed.programas.length) store.programas = parsed.programas;
+        if(parsed.apiKey) store.apiKey = parsed.apiKey;
+        if(parsed.iaPrompt) store.iaPrompt = parsed.iaPrompt;
+        if(parsed.milheiroRefs) store.milheiroRefs = parsed.milheiroRefs;
+        if(parsed.cotacaoDolarManual) store.cotacaoDolarManual = parsed.cotacaoDolarManual;
       }
     }
   } catch(e){}
-  store = defaultStore();
 }
 function saveStore(){
-  // Salva local sempre; se Firebase configurado, salva lá também
-  saveStoreLocal();
-  if(_fbReady) saveStoreFirebase();
+  saveStoreSupabase();
 }
 function loadSession(){
   try{ const s=localStorage.getItem(SESS_KEY); if(s) session=JSON.parse(s); }
@@ -724,21 +699,21 @@ function bindLogin(){
     const s=senha.value;
     err.classList.add("hidden");
     btn.textContent="Verificando…"; btn.disabled=true;
-    setTimeout(()=>{
-      if(e===store.master.email.toLowerCase()&&s===store.master.senha){
-        session={tipo:"master",nome:"Administrador",email:e};
-        curCliente=store.clientes[0]?.tag||"";
+    supaCall({action:"login", email:e, senha:s}).then(res=>{
+      if(res.ok){
+        if(res.tipo==="master"){
+          session={tipo:"master",nome:"Administrador",email:e};
+          curCliente=store.clientes[0]?.tag||"";
+        } else {
+          session={tipo:"cliente",nome:res.nome,tag:res.tag,email:e};
+          curCliente=res.tag;
+        }
         saveSession(); render(); return;
-      }
-      const c=store.clientes.find(x=>x.email.toLowerCase()===e&&x.senha===s);
-      if(c){
-        session={tipo:"cliente",nome:c.nome,tag:c.tag,email:e};
-        curCliente=c.tag; saveSession(); render(); return;
       }
       err.textContent="E-mail ou senha incorretos.";
       err.classList.remove("hidden");
       btn.textContent="Entrar →"; btn.disabled=false;
-    },600);
+    });
   });
 }
 
@@ -1445,43 +1420,16 @@ function renderConfig(){
     </div>
   </div>
 
-  <!-- Firebase config -->
-  <div class="card" style="margin-bottom:20px;border-color:${_fbReady?"#10b98130":"#f59e0b30"}">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <div style="width:36px;height:36px;border-radius:10px;background:${_fbReady?"#10b98120":"#f59e0b20"};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">${_fbReady?"🔥":"⚙️"}</div>
+  <!-- Supabase status -->
+  <div class="card" style="margin-bottom:20px;border-color:#10b98130">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:36px;height:36px;border-radius:10px;background:#10b98120;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#10b981;flex-shrink:0">DB</div>
       <div style="flex:1">
-        <div style="font-size:13px;font-weight:700">Firebase — Banco de Dados na Nuvem</div>
-        <div style="font-size:11px;color:${_fbReady?"#10b981":"#f59e0b"};font-weight:600">${_fbReady?"✓ Conectado — dados sincronizados com todos os usuários":"⚠ Não configurado — dados ficam só neste dispositivo"}</div>
+        <div style="font-size:13px;font-weight:700">Supabase — Banco de Dados</div>
+        <div style="font-size:11px;color:#10b981;font-weight:600">&#10003; Conectado — dados sincronizados com segurança</div>
       </div>
     </div>
-
-    ${!_fbReady?`<div style="background:#f59e0b10;border:1px solid #f59e0b20;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#f59e0b;line-height:1.6">
-      <strong>Como configurar (grátis, 5 minutos):</strong><br>
-      1. Acesse <a href="https://console.firebase.google.com" target="_blank" style="color:${G.gold}">console.firebase.google.com</a> → Criar projeto<br>
-      2. Firestore Database → Criar banco → Modo de teste (por ora)<br>
-      3. Configurações do projeto → Seus apps → Web → Registrar app<br>
-      4. Copie o objeto <code>firebaseConfig</code> e cole os campos abaixo
-    </div>`:""}
-
-    <div class="grid2">
-      <div class="fgroup"><label class="flabel">API Key *</label>
-        <input id="fb-apiKey" class="inp" placeholder="AIzaSy..." value="${esc(getFirebaseCfg()?.apiKey||"")}"/>
-      </div>
-      <div class="fgroup"><label class="flabel">Project ID *</label>
-        <input id="fb-projectId" class="inp" placeholder="meu-projeto-12345" value="${esc(getFirebaseCfg()?.projectId||"")}"/>
-      </div>
-      <div class="fgroup"><label class="flabel">App ID</label>
-        <input id="fb-appId" class="inp" placeholder="1:123:web:abc" value="${esc(getFirebaseCfg()?.appId||"")}"/>
-      </div>
-      <div class="fgroup"><label class="flabel">Auth Domain</label>
-        <input id="fb-authDomain" class="inp" placeholder="projeto.firebaseapp.com" value="${esc(getFirebaseCfg()?.authDomain||"")}"/>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-      <button onclick="salvarFirebaseConfig()" class="btn btn-gold">💾 Salvar e Conectar</button>
-      ${_fbReady?`<button onclick="forcarSyncFirebase()" class="btn btn-ghost">↑ Enviar dados locais → Firebase</button>`:""}
-    </div>
-    <div id="fb-status-msg" style="font-size:11px;color:${G.muted};margin-top:8px"></div>
+    <div style="font-size:12px;color:${G.muted};line-height:1.6">Dados protegidos com Row Level Security (RLS). Apenas usuarios autenticados acessam seus proprios dados.</div>
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:24px">
@@ -1489,7 +1437,7 @@ function renderConfig(){
     <div class="card">
       <div class="serif" style="font-size:17px;font-weight:600;margin-bottom:14px">⚙ Credenciais Master</div>
       <div class="fgroup"><label class="flabel">E-mail Master</label>
-        <input id="cfg-email" type="email" class="inp" value="${esc(store.master.email)}"/>
+        <input id="cfg-email" type="email" class="inp" value="${esc(session?.email||"gestao@veturviagens.com.br")}"/>
       </div>
       <div class="fgroup"><label class="flabel">Nova Senha</label>
         <input id="cfg-senha" type="text" class="inp" placeholder="Nova senha..."/>
@@ -2095,41 +2043,6 @@ function movsSearchInput(val){
 
 
 // ── IA Prompt admin ──
-async function salvarFirebaseConfig(){
-  const cfg = {
-    apiKey:     document.getElementById("fb-apiKey")?.value?.trim()||"",
-    projectId:  document.getElementById("fb-projectId")?.value?.trim()||"",
-    appId:      document.getElementById("fb-appId")?.value?.trim()||"",
-    authDomain: document.getElementById("fb-authDomain")?.value?.trim()||"",
-    storageBucket: (document.getElementById("fb-projectId")?.value?.trim()||"")+".appspot.com",
-  };
-  if(!cfg.apiKey||!cfg.projectId){
-    const el=document.getElementById("fb-status-msg");
-    if(el){el.textContent="⚠ Preencha API Key e Project ID.";el.style.color="#f59e0b";}
-    return;
-  }
-  saveFirebaseCfg(cfg);
-  const el=document.getElementById("fb-status-msg");
-  if(el){el.textContent="Conectando...";el.style.color="#4E6285";}
-  const ok = await initFirebase();
-  if(ok){
-    await loadStoreFirebase();
-    if(el){el.textContent="✓ Conectado! Recarregando...";el.style.color="#10b981";}
-    setTimeout(()=>render(), 800);
-  } else {
-    if(el){el.textContent="✗ Erro ao conectar. Verifique as credenciais.";el.style.color="#ef4444";}
-  }
-}
-
-async function forcarSyncFirebase(){
-  if(!_fbReady){alert("Firebase não configurado.");return;}
-  const el=document.getElementById("fb-status-msg");
-  if(el){el.textContent="Enviando...";el.style.color="#4E6285";}
-  await saveStoreFirebase();
-  if(el){el.textContent="✓ Dados enviados para o Firebase!";el.style.color="#10b981";}
-}
-
-
 function saveApiKey(val){
   store.apiKey = val.trim();
   saveStore();
@@ -2200,35 +2113,37 @@ function resetIaPrompt(){
 
 
 function hardReset(){
-  if(!confirm("Isso vai apagar todos os dados locais e reiniciar o app. Continuar?")) return;
   try{
-    // Limpar todas as chaves VETUR
-    Object.keys(localStorage).filter(k=>k.startsWith("vetur")).forEach(k=>localStorage.removeItem(k));
+    Object.keys(localStorage).forEach(k=>localStorage.removeItem(k));
   }catch(e){}
   location.reload();
 }
 
 
 // ── Cotação do dólar ──
-let cotacaoDolar = 5.70; // fallback caso API falhe
+let cotacaoDolar = 5.80; // fallback caso APIs falhem
 
 async function buscarCotacaoDolar(){
   // Se admin definiu manual, usar essa
   if(store.cotacaoDolarManual && store.cotacaoDolarManual > 1){
     cotacaoDolar = store.cotacaoDolarManual;
-    console.log("Cotação manual:", cotacaoDolar);
     return;
   }
+  // Tenta AwesomeAPI primeiro
   try{
-    const url = `https://economia.awesomeapi.com.br/json/last/USD-BRL`;
-    const res = await fetch(url);
-    const d = await res.json();
-    const val = parseFloat(d?.USDBRL?.bid);
-    if(val && val > 1){ cotacaoDolar = val; }
-    console.log("Cotação USD:", cotacaoDolar);
-  }catch(e){
-    console.warn("Cotação indisponível, usando fallback R$", cotacaoDolar);
-  }
+    const r1 = await fetch("https://economia.awesomeapi.com.br/json/last/USD-BRL");
+    const d1 = await r1.json();
+    const v1 = parseFloat(d1?.USDBRL?.bid);
+    if(v1 && v1 > 1){ cotacaoDolar = v1; return; }
+  }catch(e){}
+  // Fallback: ExchangeRate-API (sem chave)
+  try{
+    const r2 = await fetch("https://open.er-api.com/v6/latest/USD");
+    const d2 = await r2.json();
+    const v2 = parseFloat(d2?.rates?.BRL);
+    if(v2 && v2 > 1){ cotacaoDolar = v2; return; }
+  }catch(e){}
+  // Fallback silencioso — mantém valor padrão
 }
 
 
@@ -2253,15 +2168,12 @@ document.getElementById("app").innerHTML = `
 (async function initApp(){
   // Carregar store local primeiro (fallback)
   loadStore();
-  // Buscar cotação e Firebase em paralelo
-  const [fbOk] = await Promise.all([
-    initFirebase(),
+  // Buscar cotação e dados do Supabase em paralelo
+  const [sbLoaded] = await Promise.all([
+    loadStoreSupabase(),
     buscarCotacaoDolar()
   ]);
-  if(fbOk){
-    const fbLoaded = await loadStoreFirebase();
-    if(!fbLoaded) loadStore();
-  }
+  if(!sbLoaded) loadStore();
   loadSession();
   if(session){
     if(session.tipo==="master") curCliente=store.clientes[0]?.tag||"";
