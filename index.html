@@ -738,7 +738,7 @@ function renderMain(){
     {id:"programas",label:"Programas",ico:"✦"},
     {id:"cartoes",label:"Simulador Cartões",ico:"💳"},
     {id:"calc",label:"Calculadora",ico:"◇"},
-    ...(isMaster?[{id:"config",label:"Configurações",ico:"⚙"}]:[]),
+    ...(isMaster?[{id:"analise",label:"Análise",ico:"📊"},{id:"config",label:"Configurações",ico:"⚙"}]:[]),
   ];
 
   const navHTML=tabs.map(t=>`<button class="nav-btn${curTab===t.id?" active":""}" data-tab="${t.id}">${t.ico} ${t.label}</button>`).join("");
@@ -784,6 +784,7 @@ function renderTab(tab,saldos,totais,clienteAtivo,isMaster){
   if(tab==="programas") return renderProgramas(saldos,isMaster);
   if(tab==="cartoes") return renderCartoes();
   if(tab==="calc") return renderCalc(saldos,totais);
+  if(tab==="analise"&&isMaster) return renderAnalise(saldos,totais,clienteAtivo);
   if(tab==="config"&&isMaster) return renderConfig();
   return "";
 }
@@ -2121,6 +2122,278 @@ function resetIaPrompt(){
   store.iaPrompt = defaultStore().iaPrompt;
   saveStore();
   render();
+}
+
+
+// ---- ANALISE ----
+function renderAnalise(saldos, totais, clienteAtivo) {
+  const tag = curCliente;
+  const movs = getMovs(tag);
+  const meses = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+
+  // Agrupa movimentações por mês/ano
+  const byMesAno = {};
+  movs.forEach(m => {
+    if (!m.data) return;
+    const [ano, mes] = m.data.split("-");
+    const key = ano + "-" + mes;
+    if (!byMesAno[key]) byMesAno[key] = [];
+    byMesAno[key].push(m);
+  });
+
+  // Ordena chaves cronologicamente
+  const chaves = Object.keys(byMesAno).sort();
+
+  // Agrupa por ano
+  const byAno = {};
+  chaves.forEach(k => {
+    const ano = k.split("-")[0];
+    if (!byAno[ano]) byAno[ano] = [];
+    byAno[ano].push(k);
+  });
+  const anos = Object.keys(byAno).sort().reverse();
+
+  // Calcula totais por período
+  function calcPeriodo(movsList) {
+    const inv = movsList.filter(m => ["Compra Pontos/Milhas","Assinatura"].includes(m.tipo)).reduce((a,m) => a+Number(m.valor||0), 0);
+    const vnd = movsList.filter(m => m.tipo === "Venda").reduce((a,m) => a+Number(m.valor||0), 0);
+    const acum = movsList.filter(m => ["Acúmulo","Compra Pontos/Milhas","Transferência"].includes(m.tipo)).reduce((a,m) => a+Number(m.qtd||0), 0);
+    const cons = movsList.filter(m => ["Consumo","Venda"].includes(m.tipo)).reduce((a,m) => a+Number(m.qtd||0), 0);
+    const economia = movsList.filter(m => m.tipo === "Consumo" && Number(m.valorRef||0)>0).reduce((a,m) => a+(Number(m.valorRef||0)-Number(m.valor||0)), 0);
+    return { inv, vnd, lucro: vnd-inv, acum, cons, economia, qtdMovs: movsList.length };
+  }
+
+  // Totais gerais
+  const totalGeral = calcPeriodo(movs);
+  const milhoeiro = totais.mil > 0 && totais.inv > 0 ? (totais.inv / totais.mil) * 1000 : 0;
+  const roi = totais.inv > 0 ? ((totais.vnd - totais.inv) / totais.inv * 100) : 0;
+
+  // Renderiza gráfico de barras horizontal simples
+  function barChart(items, maxVal, colorFn) {
+    if (!items.length) return `<div style="color:${G.muted};text-align:center;padding:20px;font-size:13px">Sem dados</div>`;
+    return items.map(([label, val, sub]) => {
+      const pct = maxVal > 0 ? Math.max((val/maxVal)*100, 2) : 2;
+      const color = colorFn ? colorFn(val) : G.gold;
+      return `<div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span style="color:${G.text};font-weight:600">${label}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${sub ? `<span style="font-size:10px;color:${G.muted}">${sub}</span>` : ""}
+            <span style="font-family:JetBrains Mono,monospace;color:${color};font-weight:700">${typeof val === "number" && val > 999 ? fmt(val) : fmtR(val)}</span>
+          </div>
+        </div>
+        <div style="background:${G.surf};border-radius:4px;height:6px;overflow:hidden">
+          <div style="width:${pct}%;height:6px;border-radius:4px;background:linear-gradient(90deg,${color},${color}88)"></div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  // Dados mensais para o gráfico
+  const dadosMensais = chaves.slice(-12).map(k => {
+    const [ano, mes] = k.split("-");
+    const label = meses[parseInt(mes)-1] + "/" + ano.slice(2);
+    const p = calcPeriodo(byMesAno[k]);
+    return [label, p.acum, `R$${fmt(p.inv)}`];
+  });
+  const maxAcum = Math.max(...dadosMensais.map(d => d[1]), 1);
+
+  // Dados de investimento mensal
+  const dadosInv = chaves.slice(-12).map(k => {
+    const [ano, mes] = k.split("-");
+    const label = meses[parseInt(mes)-1] + "/" + ano.slice(2);
+    const p = calcPeriodo(byMesAno[k]);
+    return [label, p.inv, `${fmt(p.acum)} pts`];
+  });
+  const maxInv = Math.max(...dadosInv.map(d => d[1]), 1);
+
+  // Tabela anual
+  const tabelaAnual = anos.map(ano => {
+    const movsAno = byAno[ano].flatMap(k => byMesAno[k]);
+    const p = calcPeriodo(movsAno);
+    const milheiroAno = p.acum > 0 && p.inv > 0 ? (p.inv/p.acum)*1000 : 0;
+    return `<tr>
+      <td style="font-weight:700;color:${G.gold}">${ano}</td>
+      <td class="mono" style="color:${G.green}">${fmt(p.acum)}</td>
+      <td class="mono">${fmtR(p.inv)}</td>
+      <td class="mono" style="color:${G.gold}">${milheiroAno>0?fmtR(milheiroAno):"—"}</td>
+      <td class="mono" style="color:${p.vnd>0?G.green:G.muted}">${fmtR(p.vnd)}</td>
+      <td class="mono" style="color:${p.lucro>=0?G.green:G.red}">${fmtR(p.lucro)}</td>
+      <td>${p.qtdMovs}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" style="text-align:center;color:${G.muted};padding:20px">Sem movimentações</td></tr>`;
+
+  // Tabela mensal
+  const tabelaMensal = chaves.slice().reverse().slice(0,24).map(k => {
+    const [ano, mes] = k.split("-");
+    const label = meses[parseInt(mes)-1] + " " + ano;
+    const p = calcPeriodo(byMesAno[k]);
+    const milheiroMes = p.acum > 0 && p.inv > 0 ? (p.inv/p.acum)*1000 : 0;
+    const corMilheiro = milheiroMes <= 0 ? G.muted : milheiroMes <= 20 ? G.green : milheiroMes <= 35 ? G.gold : G.red;
+    return `<tr>
+      <td style="font-weight:600">${label}</td>
+      <td class="mono" style="color:${G.green}">${fmt(p.acum)}</td>
+      <td class="mono">${fmtR(p.inv)}</td>
+      <td class="mono" style="color:${corMilheiro}">${milheiroMes>0?fmtR(milheiroMes):"—"}</td>
+      <td class="mono" style="color:${p.vnd>0?G.green:G.muted}">${fmtR(p.vnd)}</td>
+      <td>${p.qtdMovs} movs</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="6" style="text-align:center;color:${G.muted};padding:20px">Sem movimentações</td></tr>`;
+
+  // Programas mais usados
+  const progUso = {};
+  movs.forEach(m => { if (m.clube) progUso[m.clube] = (progUso[m.clube]||0) + Number(m.qtd||0); });
+  const topProgs = Object.entries(progUso).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const maxProg = Math.max(...topProgs.map(p=>p[1]), 1);
+
+  const corMilheiroGeral = milhoeiro <= 0 ? G.muted : milhoeiro <= 20 ? G.green : milhoeiro <= 35 ? G.gold : G.red;
+
+  return `
+  <div id="analise-root">
+    <!-- Header da análise -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div>
+        <div class="serif" style="font-size:22px;font-weight:700;color:${G.text}">${esc(clienteAtivo?.nome||"Cliente")}</div>
+        <div style="font-size:11px;color:${G.muted};margin-top:2px">Dashboard de Gestão de Milhas · Análise Completa</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="imprimirAnalise()">🖨 Imprimir / PDF</button>
+      </div>
+    </div>
+
+    <!-- KPIs principais -->
+    <div class="metrics-grid" style="margin-bottom:20px">
+      <div class="metric card-gold">
+        <div class="metric-label">Total de Milhas Acumuladas</div>
+        <div class="metric-val mono" style="color:${G.gold}">${fmt(totalGeral.acum)}</div>
+        <div class="metric-sub">em ${Object.keys(progUso).length} programas ativos</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Total Investido</div>
+        <div class="metric-val" style="color:${G.text};font-size:22px">${fmtR(totalGeral.inv)}</div>
+        <div class="metric-sub">${movs.filter(m=>["Compra Pontos/Milhas","Assinatura"].includes(m.tipo)).length} operações</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Custo Médio do Milheiro</div>
+        <div class="metric-val mono" style="color:${corMilheiroGeral};font-size:22px">${milhoeiro>0?fmtR(milhoeiro):"—"}</div>
+        <div class="metric-sub" style="color:${corMilheiroGeral}">${milhoeiro>0?(milhoeiro<=20?"Excelente ✓":milhoeiro<=35?"Bom":"Alto — rever estratégia"):"Sem dados"}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Total Vendido / Retorno</div>
+        <div class="metric-val" style="color:${totalGeral.vnd>0?G.green:G.muted};font-size:22px">${fmtR(totalGeral.vnd)}</div>
+        <div class="metric-sub" style="color:${roi>=0?G.green:G.red}">${totalGeral.inv>0?`ROI: ${roi>=0?"+":""}${roi.toFixed(1)}%`:"Aguardando retorno"}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Saldo Atual Total</div>
+        <div class="metric-val mono" style="color:${G.green}">${fmt(totais.mil)}</div>
+        <div class="metric-sub">milhas disponíveis</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Lucro Líquido</div>
+        <div class="metric-val" style="color:${totalGeral.lucro>=0?G.green:G.red};font-size:22px">${fmtR(totalGeral.lucro)}</div>
+        <div class="metric-sub">${totalGeral.lucro>=0?"Estratégia lucrativa ✓":"Aguardando maturação"}</div>
+      </div>
+    </div>
+
+    <!-- Gráficos lado a lado -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div class="card">
+        <div style="font-size:12px;font-weight:700;color:${G.muted};text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Acúmulo Mensal (últimos 12 meses)</div>
+        ${barChart(dadosMensais, maxAcum, v => G.gold)}
+      </div>
+      <div class="card">
+        <div style="font-size:12px;font-weight:700;color:${G.muted};text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Investimento Mensal</div>
+        ${barChart(dadosInv, maxInv, v => G.green)}
+      </div>
+    </div>
+
+    <!-- Programas mais usados -->
+    <div class="card" style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;color:${G.muted};text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Top Programas · Milhas Acumuladas</div>
+      ${barChart(topProgs.map(([p,v]) => [p, v, ""]), maxProg, v => G.gold)}
+    </div>
+
+    <!-- Análise Anual -->
+    <div class="card" style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;color:${G.muted};text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Consolidado Anual</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Ano</th><th>Milhas Acumuladas</th><th>Investido</th><th>Custo Milheiro</th><th>Retorno</th><th>Lucro</th><th>Movs</th>
+          </tr></thead>
+          <tbody>${tabelaAnual}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Análise Mensal -->
+    <div class="card" style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;color:${G.muted};text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">Histórico Mensal (últimos 24 meses)</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Mês</th><th>Milhas Acumuladas</th><th>Investido</th><th>Custo Milheiro</th><th>Retorno</th><th>Movs</th>
+          </tr></thead>
+          <tbody>${tabelaMensal}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Rodapé -->
+    <div style="text-align:center;padding:20px;color:${G.muted};font-size:11px;border-top:1px solid ${G.border}">
+      Relatório gerado em ${new Date().toLocaleDateString("pt-BR")} · VETUR — Inteligência em Milhas
+    </div>
+  </div>`;
+}
+
+function imprimirAnalise() {
+  const root = document.getElementById("analise-root");
+  if (!root) return;
+  const win = window.open("", "_blank");
+  win.document.write(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<title>Análise VETUR — ${store.clientes.find(c=>c.tag===curCliente)?.nome||"Cliente"}</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:#fff;color:#0F1923;padding:32px;}
+h1{font-family:'Cormorant Garamond',serif;font-size:28px;color:#0F1923;margin-bottom:4px;}
+.sub{font-size:12px;color:#5A6474;margin-bottom:24px;}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:24px;}
+.kpi{border:1px solid #e5e7eb;border-radius:10px;padding:16px;}
+.kpi-label{font-size:10px;font-weight:700;color:#9AA5B4;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+.kpi-val{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace;}
+.kpi-sub{font-size:11px;color:#9AA5B4;margin-top:4px;}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;}
+th{text-align:left;padding:8px 10px;background:#f8f9fa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#5A6474;border-bottom:2px solid #e5e7eb;}
+td{padding:8px 10px;border-bottom:1px solid #f1f5f9;}
+.gold{color:#C9A84C;font-weight:700;}
+.green{color:#16a34a;font-weight:700;}
+.red{color:#ef4444;}
+.section-title{font-size:11px;font-weight:700;color:#9AA5B4;text-transform:uppercase;letter-spacing:1px;margin:20px 0 10px;}
+.bar-row{margin-bottom:8px;}
+.bar-label{display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;}
+.bar-track{background:#f1f5f9;border-radius:3px;height:5px;}
+.bar-fill{height:5px;border-radius:3px;background:linear-gradient(90deg,#C9A84C,#F0D080);}
+.footer{text-align:center;margin-top:32px;font-size:10px;color:#9AA5B4;border-top:1px solid #e5e7eb;padding-top:16px;}
+@media print{body{padding:16px;}@page{margin:1cm;}}
+</style>
+</head>
+<body>
+${root.innerHTML.replace(/style="[^"]*color:#[A-Fa-f0-9]{3,8}[^"]*"/g, s => s)
+  .replace(/background:#060C1E/g, 'background:#fff')
+  .replace(/background:#0C1525/g, 'background:#f8f9fa')
+  .replace(/background:#111E38/g, 'background:#f1f5f9')
+  .replace(/color:#E8EDF8/g, 'color:#0F1923')
+  .replace(/color:#4E6285/g, 'color:#5A6474')
+  .replace(/border:1px solid #1B2A5022/g, 'border:1px solid #e5e7eb')
+}
+</body>
+</html>`);
+  win.document.close();
+  setTimeout(() => win.print(), 800);
 }
 
 
